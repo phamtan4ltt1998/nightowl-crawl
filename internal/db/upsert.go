@@ -117,8 +117,8 @@ func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
 		// INSERT new book
 		res, err := tx.Exec(
 			"INSERT INTO books (slug,title,author,genre,chapter_count,`reads`,rating,"+
-				"c1,c2,emoji,description,tags,words,updated,source_url,cover_image,status)"+
-				" VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+				"c1,c2,emoji,description,tags,words,updated,source_url,cover_image,status,created_at,updated_at)"+
+				" VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())",
 			args.Slug, title, author, genre,
 			chapterCount, "0", rating,
 			"#6941C6", "#9E77ED", "📖",
@@ -137,7 +137,7 @@ func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
 	default:
 		// UPDATE existing book
 		bookID = existingID
-		sets := "chapter_count=?, updated=?"
+		sets := "chapter_count=?, updated=?, updated_at=NOW()"
 		params := []any{chapterCount, fmt.Sprintf("%d chương", chapterCount)}
 
 		if args.SourceURL != "" {
