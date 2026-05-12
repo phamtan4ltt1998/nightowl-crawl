@@ -47,6 +47,7 @@ func main() {
 
 	// Build crawler (used by both scheduler and HTTP handler)
 	var sharedCrawler *crawler.Crawler
+	var schedDone <-chan struct{}
 	scrapeCfg, err := config.LoadScrapeConfig("")
 	if err != nil {
 		log.Warn().Err(err).Msg("no scrape_sources.json — scheduler disabled")
@@ -67,7 +68,7 @@ func main() {
 
 		sharedCrawler = crawler.New(parser, scrapeCfg.ContentRoot, scrapeCfg.RecrawlExisting)
 		sched := job.New(scrapeCfg, sharedCrawler)
-		sched.Start(ctx)
+		schedDone = sched.Start(ctx)
 	}
 
 	// HTTP server (health + manual NDJSON endpoints)
@@ -101,12 +102,25 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	cancel() // stop scheduler
+	cancel() // signal scheduler + crawler goroutines to stop
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutCancel()
+
 	if err := srv.Shutdown(shutCtx); err != nil {
 		log.Error().Err(err).Msg("shutdown error")
 	}
+
+	// Drain in-flight crawler goroutines. After cancel() the HTTP fetches abort
+	// quickly, so this should complete well within the remaining shutCtx window.
+	if schedDone != nil {
+		select {
+		case <-schedDone:
+			log.Info().Msg("scheduler drained")
+		case <-shutCtx.Done():
+			log.Warn().Msg("scheduler drain timed out — some crawls may be mid-flight")
+		}
+	}
+
 	log.Info().Msg("nightowl-fetcher stopped")
 }

@@ -28,14 +28,18 @@ func New(cfg *config.ScrapeConfig, c *crawler.Crawler) *Scheduler {
 }
 
 // Start launches the scheduling loop in a background goroutine.
-// It exits when ctx is cancelled.
-func (s *Scheduler) Start(ctx context.Context) {
+// It exits when ctx is cancelled. The returned channel is closed when all
+// in-flight work has drained — use it in graceful shutdown to avoid killing
+// mid-crawl goroutines.
+func (s *Scheduler) Start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	switch s.cfg.Schedule.Type {
 	case "continuous":
-		go s.runContinuous(ctx)
+		go func() { defer close(done); s.runContinuous(ctx) }()
 	default: // "interval" and "cron" both map to a ticker
-		go s.runInterval(ctx)
+		go func() { defer close(done); s.runInterval(ctx) }()
 	}
+	return done
 }
 
 // runContinuous loops forever: run all sources → sleep idle_seconds → repeat.

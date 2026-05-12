@@ -256,7 +256,7 @@ func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.Sc
 		for idx, ch := range newChaps {
 			fName := fmt.Sprintf("%04d-%s.md", existingCount+idx+1, ch.Slug)
 			fPath := filepath.Join(contentDir, fName)
-			if err := os.WriteFile(fPath, []byte(ch.ContentMD), 0o644); err != nil {
+			if err := writeFileAtomic(fPath, []byte(ch.ContentMD)); err != nil {
 				log.Warn().Err(err).Str("file", fPath).Msg("write chapter failed")
 			} else {
 				writtenCount++
@@ -369,7 +369,11 @@ func (c *Crawler) fetchStory(
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			time.Sleep(time.Duration(300+rand.Intn(1000)) * time.Millisecond)
+			select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Duration(300+rand.Intn(1000)) * time.Millisecond):
+				}
 
 			ch, err := c.parser.FetchChapter(ctx, ref)
 			if err != nil {
@@ -388,6 +392,31 @@ func (c *Crawler) fetchStory(
 	wg.Wait()
 
 	return meta, chapters, totalFromListing, nil
+}
+
+// writeFileAtomic writes data to a temp file in the same directory then renames it
+// to dst. Rename is atomic on Linux — a killed process cannot leave a partial file.
+func writeFileAtomic(dst string, data []byte) error {
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, ".tmp-chapter-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }
 
 // --- helpers ---
