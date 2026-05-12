@@ -26,17 +26,20 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags="-s -w" -o fetcher ./cmd/server
 
-      - name: Deploy to VPS
+      - name: Backup current binary
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
-          # Copy binary trước khi chạy lệnh
           script_stop: true
           script: |
-            mkdir -p /home/nightowl/nightowl-fetcher
+            DEPLOY_DIR=/home/nightowl/nightowl-fetcher
+            mkdir -p "$DEPLOY_DIR"
+            if [ -f "$DEPLOY_DIR/fetcher" ]; then
+              cp "$DEPLOY_DIR/fetcher" "$DEPLOY_DIR/fetcher.prev"
+            fi
 
       - name: Copy binary to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -47,8 +50,9 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           source: fetcher
           target: /home/nightowl/nightowl-fetcher/
+          strip_components: 0
 
-      - name: Restart service
+      - name: Restart service and health check
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -58,24 +62,9 @@ jobs:
           script_stop: true
           script: |
             set -e
-
-            # Backup binary cũ để rollback
-            DEPLOY_DIR=/home/nightowl/nightowl-fetcher
-            if [ -f "$DEPLOY_DIR/fetcher.prev" ]; then
-              rm -f "$DEPLOY_DIR/fetcher.prev"
-            fi
-            if [ -f "$DEPLOY_DIR/fetcher" ]; then
-              cp "$DEPLOY_DIR/fetcher" "$DEPLOY_DIR/fetcher.prev"
-            fi
-            mv "$DEPLOY_DIR/fetcher" "$DEPLOY_DIR/fetcher"
-            chmod +x "$DEPLOY_DIR/fetcher"
-
-            # Restart systemd service (nightowl user cần sudo quyền restart service này)
+            chmod +x /home/nightowl/nightowl-fetcher/fetcher
             sudo systemctl restart nightowl-fetcher
-
-            # Health check
             sleep 5
             curl -sf http://localhost:8080/health \
               || { sudo journalctl -u nightowl-fetcher -n 50 --no-pager; exit 1; }
-
             echo "Deploy OK — commit ${{ github.sha }}"
