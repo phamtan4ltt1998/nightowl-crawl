@@ -3,11 +3,17 @@ package parse
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
 )
+
+// reMarkdownEscape matches backslash-escaped markdown punctuation produced by
+// the html-to-markdown converter (e.g. \- for dialogue dashes, \. for periods).
+// The frontend renders raw text, so these escapes must be removed.
+var reMarkdownEscape = regexp.MustCompile(`\\([\\` + "`" + `*_{}[\]()#+\-.!])`)
 
 // FetchChapter fetches a chapter URL and returns its markdown content.
 func (p *Parser) FetchChapter(ctx context.Context, ref ChapterRef) (*Chapter, error) {
@@ -90,6 +96,7 @@ func extractChapterContent(body []byte, pageURL string, sels chapterSels) (conte
 		return strings.TrimSpace(sb.String()), title, nil
 	}
 
+	markdown = reMarkdownEscape.ReplaceAllString(markdown, "$1")
 	return strings.TrimSpace(markdown), title, nil
 }
 
