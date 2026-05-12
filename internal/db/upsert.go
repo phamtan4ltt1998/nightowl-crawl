@@ -37,6 +37,7 @@ func stripMdLink(s string) string {
 // UpsertArgs mirrors the parameters of Python's upsert_story_from_dir.
 type UpsertArgs struct {
 	Slug                 string
+	ContentRoot          string  // base dir for chapter files; falls back to STORY_CONTENT_ROOT env then "story-content"
 	StoryName            string
 	FreeChapterThreshold int
 	SourceURL            string
@@ -45,6 +46,7 @@ type UpsertArgs struct {
 	Status               string
 	Description          string
 	CoverImage           string
+	Rating               float64 // 0 = not parsed from source; INSERT falls back to 4.5
 }
 
 // UpsertResult mirrors the return value of Python's upsert_story_from_dir.
@@ -58,9 +60,13 @@ type UpsertResult struct {
 // UpsertStoryFromDir reads all *.md files under story-content/<slug>/ and
 // syncs books + chapters to MySQL — exact port of Python upsert_story_from_dir.
 func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
-	contentRoot := os.Getenv("STORY_CONTENT_ROOT")
+	contentRoot := args.ContentRoot
 	if contentRoot == "" {
-		contentRoot = "story-content"
+		if v := os.Getenv("STORY_CONTENT_ROOT"); v != "" {
+			contentRoot = v
+		} else {
+			contentRoot = "story-content"
+		}
 	}
 	storyDir := filepath.Join(contentRoot, args.Slug)
 
@@ -90,6 +96,10 @@ func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
 	if genre == "" {
 		genre = "Tiên hiệp"
 	}
+	rating := args.Rating
+	if rating <= 0 {
+		rating = 4.5
+	}
 
 	tx, err := pool.Begin()
 	if err != nil {
@@ -110,7 +120,7 @@ func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
 				"c1,c2,emoji,description,tags,words,updated,source_url,cover_image,status)"+
 				" VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 			args.Slug, title, author, genre,
-			chapterCount, "0", 4.5,
+			chapterCount, "0", rating,
 			"#6941C6", "#9E77ED", "📖",
 			args.Description, args.Status, "0",
 			fmt.Sprintf("%d chương", chapterCount),
@@ -153,6 +163,10 @@ func UpsertStoryFromDir(args UpsertArgs) (*UpsertResult, error) {
 		if args.Description != "" {
 			sets += ", description=?"
 			params = append(params, args.Description)
+		}
+		if args.Rating > 0 {
+			sets += ", rating=?"
+			params = append(params, args.Rating)
 		}
 		params = append(params, bookID)
 		if _, err := tx.Exec("UPDATE books SET "+sets+" WHERE id=?", params...); err != nil {

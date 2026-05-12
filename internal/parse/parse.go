@@ -26,14 +26,15 @@ func New(client *fetch.Client, sources []config.SourceConfig) *Parser {
 
 // StoryMeta holds metadata for a story page.
 type StoryMeta struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Author      string `json:"author"`
-	Genre       string `json:"genre"`
-	Status      string `json:"status"`
-	Description string `json:"description"`
-	CoverImage  string `json:"cover_image"`
-	StorySlug   string `json:"story_slug"`
+	URL         string  `json:"url"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Genre       string  `json:"genre"`
+	Status      string  `json:"status"`
+	Description string  `json:"description"`
+	CoverImage  string  `json:"cover_image"`
+	StorySlug   string  `json:"story_slug"`
+	Rating      float64 `json:"rating"` // 0 means not found on page; caller should fallback to 4.5
 }
 
 // ChapterRef is a discovered link to a chapter.
@@ -76,6 +77,17 @@ var (
 		"h2",
 	}
 )
+
+// sourceConfigFor returns the SourceConfig matching the URL's domain, or zero value.
+func (p *Parser) sourceConfigFor(rawURL string) *config.SourceConfig {
+	domain := domainOf(rawURL)
+	for i := range p.sources {
+		if p.sources[i].Domain == domain {
+			return &p.sources[i]
+		}
+	}
+	return nil
+}
 
 // contentSelectorsFor returns chapter CSS selectors for the given URL's domain.
 func (p *Parser) contentSelectorsFor(rawURL string) chapterSels {

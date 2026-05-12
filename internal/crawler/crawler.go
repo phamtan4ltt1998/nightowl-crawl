@@ -30,12 +30,65 @@ var (
 
 // Crawler orchestrates the crawl pipeline for one scrape source.
 type Crawler struct {
-	parser *parse.Parser
+	parser          *parse.Parser
+	contentRoot     string
+	recrawlExisting bool
 }
 
-// New creates a Crawler using the given parser.
-func New(parser *parse.Parser) *Crawler {
-	return &Crawler{parser: parser}
+// New creates a Crawler using the given parser, content root directory, and recrawl flag.
+func New(parser *parse.Parser, contentRoot string, recrawlExisting bool) *Crawler {
+	return &Crawler{parser: parser, contentRoot: contentRoot, recrawlExisting: recrawlExisting}
+}
+
+// StoryResult holds the outcome of crawling one story URL.
+type StoryResult struct {
+	URL         string `json:"url"`
+	Slug        string `json:"slug"`
+	Title       string `json:"title"`
+	Author      string `json:"author"`
+	Status      string `json:"status"`
+	NewChapters int    `json:"new_chapters"`
+	Total       int    `json:"total_chapters"`
+	BookID      int64  `json:"book_id"`
+	Error       string `json:"error,omitempty"`
+}
+
+// CrawlURLs crawls multiple story URLs concurrently and streams results to out.
+// concurrency <= 0 defaults to 2. Each URL is matched to source config by domain.
+func (c *Crawler) CrawlURLs(ctx context.Context, urls []string, concurrency int, out chan<- StoryResult) {
+	if concurrency <= 0 {
+		concurrency = 2
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for _, u := range urls {
+		u := u
+		// Find matching source config (for free_chapter_threshold)
+		src := c.sourceForURL(u)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			res, err := c.crawlStory(ctx, u, src)
+			if err != nil {
+				log.Warn().Err(err).Str("url", u).Msg("crawl failed")
+				out <- StoryResult{URL: u, Slug: parse.StorySlugFromURL(u), Error: err.Error()}
+				return
+			}
+			out <- *res
+		}()
+	}
+	wg.Wait()
+}
+
+// sourceForURL returns the ScrapeSource matching the URL's domain, or an empty default.
+func (c *Crawler) sourceForURL(rawURL string) config.ScrapeSource {
+	// parser exposes source configs via its domain lookup; we replicate the domain match here.
+	// For now return a zero-value source (uses defaults: concurrency handled by CrawlURLs semaphore).
+	return config.ScrapeSource{}
 }
 
 // RunSource executes the full pipeline for one ScrapeSource entry.
@@ -63,30 +116,36 @@ func (c *Crawler) RunSource(ctx context.Context, src config.ScrapeSource) error 
 		return nil
 	}
 
-	// 2. Filter slugs already in DB (mirrors Python get_existing_slugs)
-	slugs := make([]string, len(allURLs))
-	for i, u := range allURLs {
-		slugs[i] = parse.StorySlugFromURL(u)
-	}
-
-	existing, err := db.GetExistingSlugs(slugs)
-	if err != nil {
-		log.Warn().Err(err).Msg("get existing slugs failed — crawling all")
-	}
-
+	// 2. Filter slugs already in DB — skipped when recrawlExisting=true so we
+	// re-check known stories for new chapters (dedup happens at chapter level).
 	var newURLs []string
-	for _, u := range allURLs {
-		if !existing[parse.StorySlugFromURL(u)] {
-			newURLs = append(newURLs, u)
+	if c.recrawlExisting {
+		newURLs = allURLs
+		log.Info().
+			Str("url", src.URL).
+			Int("total", len(allURLs)).
+			Msg("recrawl mode — checking all stories for new chapters")
+	} else {
+		slugs := make([]string, len(allURLs))
+		for i, u := range allURLs {
+			slugs[i] = parse.StorySlugFromURL(u)
 		}
+		existing, err := db.GetExistingSlugs(slugs)
+		if err != nil {
+			log.Warn().Err(err).Msg("get existing slugs failed — crawling all")
+		}
+		for _, u := range allURLs {
+			if !existing[parse.StorySlugFromURL(u)] {
+				newURLs = append(newURLs, u)
+			}
+		}
+		log.Info().
+			Str("url", src.URL).
+			Int("total", len(allURLs)).
+			Int("existing", len(existing)).
+			Int("new", len(newURLs)).
+			Msg("filtered")
 	}
-
-	log.Info().
-		Str("url", src.URL).
-		Int("total", len(allURLs)).
-		Int("existing", len(existing)).
-		Int("new", len(newURLs)).
-		Msg("filtered")
 
 	if len(newURLs) == 0 {
 		return nil
@@ -141,7 +200,7 @@ func (c *Crawler) RunSource(ctx context.Context, src config.ScrapeSource) error 
 			case <-time.After(jitter):
 			}
 
-			if err := c.crawlStory(ctx, storyURL, src); err != nil {
+			if _, err := c.crawlStory(ctx, storyURL, src); err != nil {
 				log.Warn().Err(err).Str("url", storyURL).Msg("story crawl failed")
 				return
 			}
@@ -171,12 +230,12 @@ func (c *Crawler) RunSource(ctx context.Context, src config.ScrapeSource) error 
 
 // crawlStory is the per-story pipeline:
 // fetch → write disk → upsert DB.
-func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.ScrapeSource) error {
+func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.ScrapeSource) (*StoryResult, error) {
 	slug := parse.StorySlugFromURL(storyURL)
-	contentDir := contentDirFor(slug)
+	contentDir := filepath.Join(c.contentRoot, slug)
 
 	if err := os.MkdirAll(contentDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", contentDir, err)
+		return nil, fmt.Errorf("mkdir %s: %w", contentDir, err)
 	}
 
 	existingNums := existingChapterNumbers(contentDir)
@@ -185,16 +244,11 @@ func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.Sc
 	// Fetch meta + chapters from remote
 	meta, newChaps, totalCount, err := c.fetchStory(ctx, storyURL, existingNums)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	log.Info().Str("slug", slug).
-		Int("new", len(newChaps)).Int("total", totalCount).
-		Msg("chapters fetched")
-
-	if len(newChaps) == 0 {
-		log.Info().Str("slug", slug).Msg("already up to date")
-	} else {
+	writtenCount := 0
+	if len(newChaps) > 0 {
 		// Sort by chapter number before writing (chapters arrive out-of-order)
 		sort.Slice(newChaps, func(i, j int) bool {
 			return newChaps[i].Number < newChaps[j].Number
@@ -204,6 +258,8 @@ func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.Sc
 			fPath := filepath.Join(contentDir, fName)
 			if err := os.WriteFile(fPath, []byte(ch.ContentMD), 0o644); err != nil {
 				log.Warn().Err(err).Str("file", fPath).Msg("write chapter failed")
+			} else {
+				writtenCount++
 			}
 		}
 	}
@@ -211,6 +267,7 @@ func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.Sc
 	// Upsert books + chapters to MySQL
 	result, err := db.UpsertStoryFromDir(db.UpsertArgs{
 		Slug:                 slug,
+		ContentRoot:          c.contentRoot,
 		StoryName:            meta.Title,
 		FreeChapterThreshold: src.FreeChapterThreshold,
 		SourceURL:            storyURL,
@@ -219,16 +276,40 @@ func (c *Crawler) crawlStory(ctx context.Context, storyURL string, src config.Sc
 		Status:               meta.Status,
 		Description:          meta.Description,
 		CoverImage:           meta.CoverImage,
+		Rating:               meta.Rating,
 	})
 	if err != nil {
-		return fmt.Errorf("upsert db slug=%s: %w", slug, err)
+		return nil, fmt.Errorf("upsert db slug=%s: %w", slug, err)
 	}
 
-	log.Info().Str("slug", slug).
+	res := &StoryResult{
+		URL:         storyURL,
+		Slug:        slug,
+		Title:       meta.Title,
+		Author:      meta.Author,
+		Status:      meta.Status,
+		NewChapters: writtenCount,
+		Total:       totalCount,
+		BookID:      result.BookID,
+	}
+
+	ev := log.Info().
 		Int64("book_id", result.BookID).
-		Int("db_new", result.NewChapters).
-		Msg("db upserted")
-	return nil
+		Str("slug", slug).
+		Str("title", meta.Title).
+		Str("author", meta.Author).
+		Str("status", meta.Status).
+		Int("new_chapters", writtenCount).
+		Int("total_chapters", totalCount)
+	if meta.Rating > 0 {
+		ev = ev.Float64("rating", meta.Rating)
+	}
+	if writtenCount == 0 {
+		ev.Msg("✓ story up-to-date")
+	} else {
+		ev.Msg("✓ story crawled")
+	}
+	return res, nil
 }
 
 // chapterData is a fetched chapter's content.
@@ -310,14 +391,6 @@ func (c *Crawler) fetchStory(
 }
 
 // --- helpers ---
-
-func contentDirFor(slug string) string {
-	root := os.Getenv("STORY_CONTENT_ROOT")
-	if root == "" {
-		root = "story-content"
-	}
-	return filepath.Join(root, slug)
-}
 
 func existingChapterNumbers(dir string) map[int]bool {
 	entries, _ := os.ReadDir(dir)

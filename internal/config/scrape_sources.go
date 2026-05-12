@@ -33,8 +33,11 @@ type Schedule struct {
 
 // ScrapeConfig is the full scrape_sources.json structure.
 type ScrapeConfig struct {
-	Schedule Schedule       `json:"schedule"`
-	Sources  []ScrapeSource `json:"sources"`
+	ContentRoot        string         `json:"content_root"`        // base dir for saved chapters; overrides STORY_CONTENT_ROOT env
+	RecrawlExisting    bool           `json:"recrawl_existing"`    // re-check known stories for new chapters each pass
+	SourceConcurrency  int            `json:"source_concurrency"`  // how many sources run in parallel (default 2)
+	Schedule           Schedule       `json:"schedule"`
+	Sources            []ScrapeSource `json:"sources"`
 }
 
 // LoadScrapeConfig reads scrape_sources.json.
@@ -58,6 +61,23 @@ func LoadScrapeConfig(path string) (*ScrapeConfig, error) {
 	var cfg ScrapeConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse scrape config: %w", err)
+	}
+
+	// Resolve content_root: JSON → env → default
+	if cfg.ContentRoot == "" {
+		if v := os.Getenv("STORY_CONTENT_ROOT"); v != "" {
+			cfg.ContentRoot = v
+		} else {
+			cfg.ContentRoot = "story-content"
+		}
+	}
+
+	// continuous mode implicitly recrawls existing stories for new chapters
+	if cfg.Schedule.Type == "continuous" && !cfg.RecrawlExisting {
+		cfg.RecrawlExisting = true
+	}
+	if cfg.SourceConcurrency <= 0 {
+		cfg.SourceConcurrency = 2
 	}
 
 	// Apply defaults

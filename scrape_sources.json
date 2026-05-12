@@ -1,0 +1,117 @@
+{
+  "content_root": "../night-owl/story-content",
+  "source_concurrency": 2,
+  "recrawl_existing": false,
+
+  "schedule": {
+    "type": "continuous",
+    "idle_seconds": 30,
+
+    "hours": 2,
+    "minutes": 0,
+
+    "active_window": {
+      "start": "",
+      "end": ""
+    }
+  },
+
+  "sources": [
+    {
+      "_genre": "Tiên hiệp",
+      "url": "https://truyencom.com/truyen-tien-hiep/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": true
+    },
+    {
+      "_genre": "Huyền huyễn",
+      "url": "https://truyencom.com/truyen-huyen-huyen/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": true
+    },
+    {
+      "_genre": "Đô thị",
+      "url": "https://truyencom.com/truyen-do-thi/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": true
+    },
+    {
+      "_genre": "Lịch sử",
+      "url": "https://truyencom.com/truyen-lich-su/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Khoa huyễn",
+      "url": "https://truyencom.com/truyen-khoa-huyen/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Võ hiệp",
+      "url": "https://truyencom.com/truyen-vo-hiep/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Ngôn tình",
+      "url": "https://truyencom.com/truyen-ngon-tinh/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Cổ trang / Cổ đại",
+      "url": "https://truyencom.com/truyen-co-dai/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Đam mỹ",
+      "url": "https://truyencom.com/truyen-dam-my/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Trinh thám",
+      "url": "https://truyencom.com/truyen-trinh-tham/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Kinh dị / Linh dị",
+      "url": "https://truyencom.com/truyen-linh-di/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    },
+    {
+      "_genre": "Xuyên Nhanh",
+      "url": "https://truyencom.com/truyen-xuyen-nhanh/full/",
+      "target_count": 0,
+      "free_chapter_threshold": 0,
+      "concurrency": 2,
+      "enabled": false
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -88,27 +89,38 @@ func (s *Scheduler) runInterval(ctx context.Context) {
 	}
 }
 
-// runAllSources executes every enabled source sequentially.
+// runAllSources executes every enabled source concurrently, bounded by SourceConcurrency.
 func (s *Scheduler) runAllSources(ctx context.Context) {
-	enabled := 0
+	var enabled []config.ScrapeSource
 	for _, src := range s.cfg.Sources {
 		if src.Enabled {
-			enabled++
+			enabled = append(enabled, src)
 		}
 	}
-	log.Info().Int("sources", enabled).Msg("running all enabled sources")
+	log.Info().
+		Int("sources", len(enabled)).
+		Int("concurrency", s.cfg.SourceConcurrency).
+		Msg("running all enabled sources")
 
-	for _, src := range s.cfg.Sources {
+	sem := make(chan struct{}, s.cfg.SourceConcurrency)
+	var wg sync.WaitGroup
+
+	for _, src := range enabled {
 		if ctx.Err() != nil {
-			return
+			break
 		}
-		if !src.Enabled {
-			continue
-		}
-		if err := s.crawler.RunSource(ctx, src); err != nil {
-			log.Error().Err(err).Str("url", src.URL).Msg("source error")
-		}
+		src := src
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := s.crawler.RunSource(ctx, src); err != nil {
+				log.Error().Err(err).Str("url", src.URL).Msg("source error")
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // inActiveWindow mirrors Python _within_active_window.

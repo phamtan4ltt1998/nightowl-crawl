@@ -42,28 +42,16 @@ func main() {
 	client := fetch.New(cfg.Concurrency, cfg.MaxRetry)
 	parser := parse.New(client, cfg.Sources)
 
-	// HTTP server (health + manual NDJSON endpoints)
-	h := handler.New(parser)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", h.Health)
-	mux.HandleFunc("POST /fetch/listing", h.FetchListing)
-	mux.HandleFunc("POST /fetch/story", h.FetchStory)
-
-	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Minute,
-		IdleTimeout:  120 * time.Second,
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start crawl scheduler if scrape_sources.json is present
+	// Build crawler (used by both scheduler and HTTP handler)
+	var sharedCrawler *crawler.Crawler
 	scrapeCfg, err := config.LoadScrapeConfig("")
 	if err != nil {
 		log.Warn().Err(err).Msg("no scrape_sources.json — scheduler disabled")
+		// Still create a crawler with defaults for manual endpoint use
+		sharedCrawler = crawler.New(parser, "story-content", false)
 	} else {
 		enabled := 0
 		for _, s := range scrapeCfg.Sources {
@@ -74,11 +62,28 @@ func main() {
 		log.Info().
 			Str("mode", scrapeCfg.Schedule.Type).
 			Int("sources", enabled).
+			Int("source_concurrency", scrapeCfg.SourceConcurrency).
 			Msg("scheduler starting")
 
-		c := crawler.New(parser)
-		sched := job.New(scrapeCfg, c)
+		sharedCrawler = crawler.New(parser, scrapeCfg.ContentRoot, scrapeCfg.RecrawlExisting)
+		sched := job.New(scrapeCfg, sharedCrawler)
 		sched.Start(ctx)
+	}
+
+	// HTTP server (health + manual NDJSON endpoints)
+	h := handler.New(parser, sharedCrawler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", h.Health)
+	mux.HandleFunc("POST /fetch/listing", h.FetchListing)
+	mux.HandleFunc("POST /fetch/story", h.FetchStory)
+	mux.HandleFunc("POST /crawl/stories", h.CrawlStories)
+
+	srv := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 10 * time.Minute,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Start HTTP server

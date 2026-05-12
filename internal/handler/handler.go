@@ -11,17 +11,19 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/nightowl/fetcher/internal/crawler"
 	"github.com/nightowl/fetcher/internal/parse"
 )
 
 // Handler holds the HTTP handlers.
 type Handler struct {
-	parser *parse.Parser
+	parser  *parse.Parser
+	crawler *crawler.Crawler
 }
 
 // New creates a Handler.
-func New(parser *parse.Parser) *Handler {
-	return &Handler{parser: parser}
+func New(parser *parse.Parser, c *crawler.Crawler) *Handler {
+	return &Handler{parser: parser, crawler: c}
 }
 
 // Health handles GET /health.
@@ -166,4 +168,75 @@ func (h *Handler) FetchStory(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 	streamLine(map[string]any{"type": "done", "count": len(refs)})
 	log.Info().Str("url", req.URL).Int("chapters", len(refs)).Msg("story fetch done")
+}
+
+// CrawlStoriesRequest is the body for POST /crawl/stories.
+type CrawlStoriesRequest struct {
+	URLs        []string `json:"urls"`
+	Concurrency int      `json:"concurrency"` // per-story workers, default 2
+}
+
+// CrawlStories handles POST /crawl/stories.
+// Triggers full crawl (disk + DB) for each URL concurrently and streams NDJSON results:
+//
+//	{"url":"...","slug":"...","new_chapters":5,"total_chapters":120}
+//	{"url":"...","slug":"...","error":"..."}
+//	{"type":"done","total":3,"failed":0}
+func (h *Handler) CrawlStories(w http.ResponseWriter, r *http.Request) {
+	if h.crawler == nil {
+		http.Error(w, "crawler not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req CrawlStoriesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if len(req.URLs) == 0 {
+		http.Error(w, "urls required", http.StatusBadRequest)
+		return
+	}
+	if len(req.URLs) > 50 {
+		http.Error(w, "max 50 urls per request", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	enc := json.NewEncoder(w)
+	var mu sync.Mutex
+	streamLine := func(v any) {
+		mu.Lock()
+		enc.Encode(v)
+		flusher.Flush()
+		mu.Unlock()
+	}
+
+	out := make(chan crawler.StoryResult, len(req.URLs))
+
+	go func() {
+		h.crawler.CrawlURLs(r.Context(), req.URLs, req.Concurrency, out)
+		close(out)
+	}()
+
+	failed := 0
+	for res := range out {
+		if res.Error != "" {
+			failed++
+		}
+		streamLine(res)
+	}
+
+	streamLine(map[string]any{
+		"type":   "done",
+		"total":  len(req.URLs),
+		"failed": failed,
+	})
+	log.Info().Int("total", len(req.URLs)).Int("failed", failed).Msg("batch crawl done")
 }
