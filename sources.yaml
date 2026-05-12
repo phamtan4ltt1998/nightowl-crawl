@@ -1,0 +1,30 @@
+sources:
+  - domain: truyencom.com
+    story:
+      title_selectors:
+        - h1.book-name
+        - "h1.story-title"
+        - ".book-name h1"
+        - h1
+      cover_container: div.info-holder img
+      info_container: div.info
+      desc_selectors:
+        - div.desc-text
+        - div.desc
+        - ".book-intro"
+        - ".summary"
+      author_label: "tác giả"
+      genre_label: "thể loại"
+      status_label: "trạng thái"
+    chapter:
+      content_selectors:
+        - div.chapter-content
+        - "div#chapter-c"
+        - div.box-chap
+        - div.content-chapter
+        - "div#chapter-content"
+      title_selectors:
+        - h2.chapter-title
+        - h1.chapter-title
+        - ".chapter-title"
+        - h2
